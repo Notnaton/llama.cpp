@@ -19,19 +19,60 @@ GGML_QUANT_VERSION     = 2  # GGML_QNT_VERSION from ggml.h
 
 class Keys:
     class General:
-        TYPE                 = "general.type"
-        ARCHITECTURE         = "general.architecture"
-        QUANTIZATION_VERSION = "general.quantization_version"
-        ALIGNMENT            = "general.alignment"
-        NAME                 = "general.name"
-        AUTHOR               = "general.author"
-        VERSION              = "general.version"
-        URL                  = "general.url"
-        DESCRIPTION          = "general.description"
-        LICENSE              = "general.license"
-        SOURCE_URL           = "general.source.url"
-        SOURCE_HF_REPO       = "general.source.huggingface.repository"
-        FILE_TYPE            = "general.file_type"
+        TYPE                       = "general.type"
+        ARCHITECTURE               = "general.architecture"
+        QUANTIZATION_VERSION       = "general.quantization_version"
+        ALIGNMENT                  = "general.alignment"
+        FILE_TYPE                  = "general.file_type"
+
+        # Authorship Metadata
+        NAME                       = "general.name"
+        AUTHOR                     = "general.author"
+        VERSION                    = "general.version"
+        ORGANIZATION               = "general.organization"
+
+        FINETUNE                   = "general.finetune"
+        BASENAME                   = "general.basename"
+
+        DESCRIPTION                = "general.description"
+        QUANTIZED_BY               = "general.quantized_by"
+
+        SIZE_LABEL                 = "general.size_label"
+
+        # Licensing details
+        LICENSE                    = "general.license"
+        LICENSE_NAME               = "general.license.name"
+        LICENSE_LINK               = "general.license.link"
+
+        # Typically represents the converted GGUF repo (Unless native)
+        URL                        = "general.url" # Model Website/Paper
+        DOI                        = "general.doi"
+        UUID                       = "general.uuid"
+        REPO_URL                   = "general.repo_url" # Model Source Repository (git/svn/etc...)
+
+        # Model Source during conversion
+        SOURCE_URL                 = "general.source.url" # Model Website/Paper
+        SOURCE_DOI                 = "general.source.doi"
+        SOURCE_UUID                = "general.source.uuid"
+        SOURCE_REPO_URL            = "general.source.repo_url" # Model Source Repository (git/svn/etc...)
+
+        # Base Model Source. There can be more than one source if it's a merged
+        # model like with 'Mistral-7B-Merge-14-v0.1'. This will assist in
+        # tracing linage of models as it is finetuned or merged over time.
+        BASE_MODEL_COUNT           = "general.base_model.count"
+        BASE_MODEL_NAME            = "general.base_model.{id}.name"
+        BASE_MODEL_AUTHOR          = "general.base_model.{id}.author"
+        BASE_MODEL_VERSION         = "general.base_model.{id}.version"
+        BASE_MODEL_ORGANIZATION    = "general.base_model.{id}.organization"
+        BASE_MODEL_URL             = "general.base_model.{id}.url" # Model Website/Paper
+        BASE_MODEL_DOI             = "general.base_model.{id}.doi"
+        BASE_MODEL_UUID            = "general.base_model.{id}.uuid"
+        BASE_MODEL_REPO_URL        = "general.base_model.{id}.repo_url" # Model Source Repository (git/svn/etc...)
+
+        # Array based KV stores
+        TAGS                       = "general.tags"
+        LANGUAGES                  = "general.languages"
+        DATASETS                   = "general.datasets"
 
     class LLM:
         VOCAB_SIZE                        = "{arch}.vocab_size"
@@ -120,6 +161,7 @@ class Keys:
         SUFFIX_ID            = "tokenizer.ggml.suffix_token_id"
         MIDDLE_ID            = "tokenizer.ggml.middle_token_id"
         EOT_ID               = "tokenizer.ggml.eot_token_id"
+        EOM_ID               = "tokenizer.ggml.eom_token_id"
 
     class Adapter:
         TYPE       = "adapter.type"
@@ -175,7 +217,10 @@ class MODEL_ARCH(IntEnum):
     CHATGLM      = auto()
     BITNET       = auto()
     T5           = auto()
+    T5ENCODER    = auto()
     JAIS         = auto()
+    NEMOTRON     = auto()
+    EXAONE       = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -302,7 +347,10 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.CHATGLM:        "chatglm",
     MODEL_ARCH.BITNET:         "bitnet",
     MODEL_ARCH.T5:             "t5",
+    MODEL_ARCH.T5ENCODER:      "t5encoder",
     MODEL_ARCH.JAIS:           "jais",
+    MODEL_ARCH.NEMOTRON:       "nemotron",
+    MODEL_ARCH.EXAONE:         "exaone",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -994,6 +1042,21 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ENC_FFN_UP,
         MODEL_TENSOR.ENC_OUTPUT_NORM,
     ],
+    MODEL_ARCH.T5ENCODER: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ENC_ATTN_NORM,
+        MODEL_TENSOR.ENC_ATTN_Q,
+        MODEL_TENSOR.ENC_ATTN_K,
+        MODEL_TENSOR.ENC_ATTN_V,
+        MODEL_TENSOR.ENC_ATTN_OUT,
+        MODEL_TENSOR.ENC_ATTN_REL_B,
+        MODEL_TENSOR.ENC_FFN_NORM,
+        MODEL_TENSOR.ENC_FFN_GATE,
+        MODEL_TENSOR.ENC_FFN_DOWN,
+        MODEL_TENSOR.ENC_FFN_UP,
+        MODEL_TENSOR.ENC_OUTPUT_NORM,
+    ],
     MODEL_ARCH.JAIS: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -1004,6 +1067,37 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.NEMOTRON: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.EXAONE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
     # TODO
@@ -1045,6 +1139,10 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     ],
     MODEL_ARCH.CHATGLM: [
         MODEL_TENSOR.ROPE_FREQS,
+    ],
+    MODEL_ARCH.NEMOTRON: [
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
 }
 
@@ -1104,6 +1202,9 @@ class GGMLQuantizationType(IntEnum):
     F64     = 28
     IQ1_M   = 29
     BF16    = 30
+    Q4_0_4_4 = 31
+    Q4_0_4_8 = 32
+    Q4_0_8_8 = 33
 
 
 # TODO: add GGMLFileType from ggml_ftype in ggml.h
@@ -1116,7 +1217,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_F16           = 1   # except 1d tensors
     MOSTLY_Q4_0          = 2   # except 1d tensors
     MOSTLY_Q4_1          = 3   # except 1d tensors
-    MOSTLY_Q4_1_SOME_F16 = 4   # tok_embeddings.weight and output.weight are F16
+    # MOSTLY_Q4_1_SOME_F16 = 4   # tok_embeddings.weight and output.weight are F16
     # MOSTLY_Q4_2        = 5   # support has been removed
     # MOSTLY_Q4_3        = 6   # support has been removed
     MOSTLY_Q8_0          = 7   # except 1d tensors
@@ -1145,6 +1246,9 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ4_XS        = 30  # except 1d tensors
     MOSTLY_IQ1_M         = 31  # except 1d tensors
     MOSTLY_BF16          = 32  # except 1d tensors
+    MOSTLY_Q4_0_4_4      = 33  # except 1d tensors
+    MOSTLY_Q4_0_4_8      = 34  # except 1d tensors
+    MOSTLY_Q4_0_8_8      = 35  # except 1d tensors
 
     GUESSED              = 1024  # not specified in the model file
 
@@ -1218,6 +1322,9 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.F64:     (1, 8),
     GGMLQuantizationType.IQ1_M:   (256, QK_K // 8 + QK_K // 16  + QK_K // 32),
     GGMLQuantizationType.BF16:    (1, 2),
+    GGMLQuantizationType.Q4_0_4_4:(32, 2 + 16),
+    GGMLQuantizationType.Q4_0_4_8:(32, 2 + 16),
+    GGMLQuantizationType.Q4_0_8_8:(32, 2 + 16),
 }
 
 
@@ -1233,7 +1340,6 @@ KEY_GENERAL_URL                  = Keys.General.URL
 KEY_GENERAL_DESCRIPTION          = Keys.General.DESCRIPTION
 KEY_GENERAL_LICENSE              = Keys.General.LICENSE
 KEY_GENERAL_SOURCE_URL           = Keys.General.SOURCE_URL
-KEY_GENERAL_SOURCE_HF_REPO       = Keys.General.SOURCE_HF_REPO
 KEY_GENERAL_FILE_TYPE            = Keys.General.FILE_TYPE
 
 # LLM
@@ -1287,3 +1393,4 @@ KEY_TOKENIZER_PRIFIX_ID  = Keys.Tokenizer.PREFIX_ID
 KEY_TOKENIZER_SUFFIX_ID  = Keys.Tokenizer.SUFFIX_ID
 KEY_TOKENIZER_MIDDLE_ID  = Keys.Tokenizer.MIDDLE_ID
 KEY_TOKENIZER_EOT_ID     = Keys.Tokenizer.EOT_ID
+KEY_TOKENIZER_EOM_ID     = Keys.Tokenizer.EOM_ID
