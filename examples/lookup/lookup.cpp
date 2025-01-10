@@ -22,7 +22,7 @@ int main(int argc, char ** argv){
     common_init();
 
     // max. number of additional tokens to draft if match is found
-    const int n_draft = params.n_draft;
+    const int n_draft = params.speculative.n_max;
 
     const bool dump_kv_cache = params.dump_kv_cache;
 
@@ -33,8 +33,8 @@ int main(int argc, char ** argv){
     // load the model
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
 
     // tokenize the prompt
     std::vector<llama_token> inp;
@@ -102,7 +102,7 @@ int main(int argc, char ** argv){
 
     bool has_eos = false;
 
-    struct common_sampler * smpl = common_sampler_init(model, params.sparams);
+    struct common_sampler * smpl = common_sampler_init(model, params.sampling);
 
     std::vector<llama_token> draft;
 
@@ -242,9 +242,6 @@ int main(int argc, char ** argv){
     common_sampler_free(smpl);
 
     llama_batch_free(batch_tgt);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 

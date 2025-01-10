@@ -62,49 +62,6 @@ static bool file_is_empty(const std::string & path) {
     return f.tellg() == 0;
 }
 
-static void write_logfile(
-    const llama_context * ctx, const common_params & params, const llama_model * model,
-    const std::vector<llama_token> & input_tokens, const std::string & output,
-    const std::vector<llama_token> & output_tokens
-) {
-    if (params.logdir.empty()) {
-        return;
-    }
-
-    const std::string timestamp = string_get_sortable_timestamp();
-
-    const bool success = fs_create_directory_with_parents(params.logdir);
-    if (!success) {
-        LOG_ERR("%s: failed to create logdir %s, cannot write logfile\n", __func__, params.logdir.c_str());
-        return;
-    }
-
-    const std::string logfile_path = params.logdir + timestamp + ".yml";
-    FILE * logfile = fopen(logfile_path.c_str(), "w");
-
-    if (logfile == NULL) {
-        LOG_ERR("%s: failed to open logfile %s\n", __func__, logfile_path.c_str());
-        return;
-    }
-
-    fprintf(logfile, "binary: main\n");
-    char model_desc[128];
-    llama_model_desc(model, model_desc, sizeof(model_desc));
-    yaml_dump_non_result_info(logfile, params, ctx, timestamp, input_tokens, model_desc);
-
-    fprintf(logfile, "\n");
-    fprintf(logfile, "######################\n");
-    fprintf(logfile, "# Generation Results #\n");
-    fprintf(logfile, "######################\n");
-    fprintf(logfile, "\n");
-
-    yaml_dump_string_multiline(logfile, "output", output.c_str());
-    yaml_dump_vector_int(logfile, "output_tokens", output_tokens);
-
-    llama_perf_dump_yaml(logfile, ctx);
-    fclose(logfile);
-}
-
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__)) || defined (_WIN32)
 static void sigint_handler(int signo) {
     if (signo == SIGINT) {
@@ -115,7 +72,6 @@ static void sigint_handler(int signo) {
             console::cleanup();
             LOG("\n");
             common_perf_print(*g_ctx, *g_smpl);
-            write_logfile(*g_ctx, *g_params, *g_model, *g_input_tokens, g_output_ss->str(), *g_output_tokens);
 
             // make sure all logs are flushed
             LOG("Interrupted by user\n");
@@ -144,7 +100,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    auto & sparams = params.sparams;
+    auto & sparams = params.sampling;
 
     // save choice to use color for later
     // (note for later: this is a slightly awkward choice)
@@ -189,18 +145,18 @@ int main(int argc, char ** argv) {
     llama_context * ctx = nullptr;
     common_sampler * smpl = nullptr;
 
-    std::vector<common_chat_msg> chat_msgs;
-
     g_model = &model;
     g_ctx = &ctx;
     g_smpl = &smpl;
+
+    std::vector<common_chat_msg> chat_msgs;
 
     // load the model and apply lora adapter, if any
     LOG_INF("%s: load the model and apply lora adapter, if any\n", __func__);
     common_init_result llama_init = common_init_from_params(params);
 
-    model = llama_init.model;
-    ctx = llama_init.context;
+    model = llama_init.model.get();
+    ctx = llama_init.context.get();
 
     if (model == NULL) {
         LOG_ERR("%s: error: unable to load model\n", __func__);
@@ -208,6 +164,10 @@ int main(int argc, char ** argv) {
     }
 
     LOG_INF("%s: llama threadpool init, n_threads = %d\n", __func__, (int) params.cpuparams.n_threads);
+
+    auto * reg = ggml_backend_dev_backend_reg(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU));
+    auto * ggml_threadpool_new_fn = (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new");
+    auto * ggml_threadpool_free_fn = (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free");
 
     struct ggml_threadpool_params tpp_batch =
             ggml_threadpool_params_from_cpu_params(params.cpuparams_batch);
@@ -218,7 +178,7 @@ int main(int argc, char ** argv) {
 
     struct ggml_threadpool * threadpool_batch = NULL;
     if (!ggml_threadpool_params_match(&tpp, &tpp_batch)) {
-        threadpool_batch = ggml_threadpool_new(&tpp_batch);
+        threadpool_batch = ggml_threadpool_new_fn(&tpp_batch);
         if (!threadpool_batch) {
             LOG_ERR("%s: batch threadpool create failed : n_threads %d\n", __func__, tpp_batch.n_threads);
             return 1;
@@ -228,7 +188,7 @@ int main(int argc, char ** argv) {
         tpp.paused = true;
     }
 
-    struct ggml_threadpool * threadpool = ggml_threadpool_new(&tpp);
+    struct ggml_threadpool * threadpool = ggml_threadpool_new_fn(&tpp);
     if (!threadpool) {
         LOG_ERR("%s: threadpool create failed : n_threads %d\n", __func__, tpp.n_threads);
         return 1;
@@ -534,7 +494,7 @@ int main(int argc, char ** argv) {
         }
 
         llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
-        if (decoder_start_token_id == -1) {
+        if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
             decoder_start_token_id = llama_token_bos(model);
         }
 
@@ -871,7 +831,7 @@ int main(int argc, char ** argv) {
                     // if user stop generation mid-way, we must add EOT to finish model's last response
                     if (need_insert_eot && format_chat) {
                         llama_token eot = llama_token_eot(model);
-                        embd_inp.push_back(eot == -1 ? llama_token_eos(model) : eot);
+                        embd_inp.push_back(eot == LLAMA_TOKEN_NULL ? llama_token_eos(model) : eot);
                         need_insert_eot = false;
                     }
 
@@ -926,17 +886,13 @@ int main(int argc, char ** argv) {
 
     LOG("\n\n");
     common_perf_print(ctx, smpl);
-    write_logfile(ctx, params, model, input_tokens, output_ss.str(), output_tokens);
 
     common_sampler_free(smpl);
 
-    llama_free(ctx);
-    llama_free_model(model);
-
     llama_backend_free();
 
-    ggml_threadpool_free(threadpool);
-    ggml_threadpool_free(threadpool_batch);
+    ggml_threadpool_free_fn(threadpool);
+    ggml_threadpool_free_fn(threadpool_batch);
 
     return 0;
 }

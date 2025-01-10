@@ -132,8 +132,8 @@ int main(int argc, char ** argv) {
     // load the target model
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
 
     // load the prompts from an external file if there are any
     if (params.prompt.empty()) {
@@ -160,7 +160,7 @@ int main(int argc, char ** argv) {
     for (size_t i = 0; i < clients.size(); ++i) {
         auto & client = clients[i];
         client.id = i;
-        client.smpl = common_sampler_init(model, params.sparams);
+        client.smpl = common_sampler_init(model, params.sampling);
     }
 
     std::vector<llama_token> tokens_system;
@@ -415,9 +415,6 @@ int main(int argc, char ** argv) {
     llama_perf_context_print(ctx);
 
     llama_batch_free(batch);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 
