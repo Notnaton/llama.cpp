@@ -1093,8 +1093,20 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 switch (hparams.n_layer) {
-                    case 28: type = LLM_TYPE_6B; break;
-                    case 40: type = LLM_TYPE_9B; break;
+                    case 28: {
+                        if (hparams.n_head(0) == 16) {
+                            type = LLM_TYPE_1_5B;
+                        } else {
+                            type = LLM_TYPE_6B;
+                        }
+                    } break;
+                    case 40: {
+                        if (hparams.n_head(0) == 24) {
+                            type = LLM_TYPE_4B;
+                        } else {
+                            type = LLM_TYPE_9B;
+                        }
+                    } break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
@@ -1263,6 +1275,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
     const bool use_mmap_buffer = true;
 
+    LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s)\n", __func__, ml.use_mmap ? "true" : "false");
+
     // build a list of buffer types for the CPU and GPU devices
     pimpl->cpu_buft_list = make_cpu_buft_list(devices);
     for (auto * dev : devices) {
@@ -1303,10 +1317,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, (int)n_layer + 1);
     auto get_layer_buft_list = [&](int il) -> llama_model::impl::layer_dev {
         if (il < i_gpu_start || (il - i_gpu_start) >= act_gpu_layers) {
+            LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s\n", il, ggml_backend_dev_name(cpu_dev));
             return {cpu_dev, &pimpl->cpu_buft_list};
         }
         const int layer_gpu = std::upper_bound(splits.begin(), splits.begin() + n_devices(), float(il - i_gpu_start)/act_gpu_layers) - splits.begin();
         auto * dev = devices.at(layer_gpu);
+        LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s\n", il, ggml_backend_dev_name(dev));
         return {dev, &pimpl->gpu_buft_list.at(dev)};
     };
 
@@ -1406,6 +1422,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 info = llm_tensor_info_for(tn_tensor);
             } catch (const std::out_of_range & e) {
                 throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
+            }
+
+            // skip unused tensors
+            if (info.op == GGML_OP_NONE) {
+                LLAMA_LOG_WARN("model has unused tensor %s -- ignoring\n", tn.str().c_str());
+                ml.n_created++;
+
+                return nullptr;
             }
 
             // tensors with "bias" suffix are always used with GGML_OP_ADD
@@ -2178,13 +2202,16 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             case LLM_ARCH_PHI3:
                 {
-                    const int64_t n_embd_head = n_embd / n_head;
-
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 
                     // output
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
-                    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), { n_embd, n_vocab }, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+                    // if output is NULL, init from the input tok embed
+                    if (output == NULL) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
@@ -2199,8 +2226,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
                         layer.ffn_up = create_tensor(tn(LLM_TENSOR_FFN_UP, "weight", i), { n_embd, 2 * n_ff }, 0);
 
-                        layer.rope_long  = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_LONG,  "weight", i), { n_embd_head/2 }, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
-                        layer.rope_short = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_SHORT, "weight", i), { n_embd_head/2 }, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+                        layer.rope_long  = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_LONG,  "weight", i), { n_rot/2 }, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+                        layer.rope_short = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_SHORT, "weight", i), { n_rot/2 }, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
                     }
                 } break;
             case LLM_ARCH_PHIMOE:
@@ -3066,9 +3093,17 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         auto & layer = layers[i];
 
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                        layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                        layer.bqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias", i),   {n_embd + 2*n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
-                        layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, 0);
-                        layer.bqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias", i),   {n_embd + 2*n_embd_gqa}, 0);
+                        if (layer.wqkv == nullptr) {
+                            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
+                            layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
+                            layer.bq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_embd},     llama_model_loader::TENSOR_NOT_REQUIRED);
+                            layer.bk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                            layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                        }
 
                         layer.wo   = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
 
@@ -3804,6 +3839,10 @@ int32_t llama_model_n_layer(const struct llama_model * model) {
 
 int32_t llama_model_n_head(const struct llama_model * model) {
     return model->hparams.n_head();
+}
+
+int32_t llama_model_n_head_kv(const struct llama_model * model) {
+    return model->hparams.n_head_kv();
 }
 
 // deprecated
