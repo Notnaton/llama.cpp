@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama.h"
+#include "llama-ext.h"
 #include "llama-cparams.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
@@ -22,16 +23,20 @@ class llama_io_write_i;
 struct llama_memory_i;
 struct llama_memory_context_i;
 
-// "memory" as in physical memory for a buffer type, in bytes
-struct llama_memory_breakdown_data {
-    size_t model   = 0; // memory allocated for the model
-    size_t context = 0; // memory allocated for the context
-    size_t compute = 0; // memory allocated for temporary compute buffers
+// stores copy of the memory in device buffer. used for fast state save/load
+struct llama_memory_buffer {
+    int n_tensors = 0;
+    size_t total_size = 0;
 
-    size_t total() const {
-        return model + context + compute;
-    }
+    ggml_backend_buffer_ptr buf;
+
+    ggml_context_ptr ctx;
+
+    std::vector<ggml_tensor *> org;
+    std::vector<ggml_tensor *> cpy;
 };
+
+using llama_memory_buffers = std::map<ggml_backend_buffer_type_t, llama_memory_buffer>;
 
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
@@ -105,16 +110,11 @@ struct llama_context {
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
-    void set_adapter_lora(
-            llama_adapter_lora * adapter,
-            float scale);
+    void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
-    bool rm_adapter_lora(
-            llama_adapter_lora * adapter);
+    bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
-    void clear_adapter_lora();
-
-    bool apply_adapter_cvec(
+    bool set_adapter_cvec(
             const float * data,
                  size_t   len,
                 int32_t   n_embd,
@@ -143,6 +143,7 @@ struct llama_context {
     size_t state_set_data(const uint8_t * src, size_t size);
 
     size_t state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags);
+
     size_t state_seq_get_data(llama_seq_id seq_id,       uint8_t * dst, size_t size, llama_state_seq_flags flags);
     size_t state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags);
 
@@ -177,7 +178,7 @@ struct llama_context {
     llama_perf_context_data perf_get_data() const;
     void perf_reset();
 
-    std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> memory_breakdown() const;
+    llama_memory_breakdown memory_breakdown() const;
 
     //
     // training
@@ -261,33 +262,36 @@ private:
 
     const llama_model & model;
 
-    llama_cparams       cparams;
-    llama_adapter_cvec  cvec;
-    llama_adapter_loras loras;
+    llama_cparams cparams;
+
+    llama_adapter_cvec_ptr  cvec;
+    llama_adapter_loras_ptr loras;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
     std::unique_ptr<llama_memory_i> memory;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
-    struct buffer_view<float>  logits = {nullptr, 0};
+    buffer_view<float> logits = {nullptr, 0};
 
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
-    struct buffer_view<float>  embd = {nullptr, 0};
+    buffer_view<float> embd = {nullptr, 0};
 
     struct sampling_info {
+        // !samplers.empty() to check if any samplers are active
         std::map<llama_seq_id, llama_sampler *> samplers;
 
-        struct buffer_view<float>       logits     = {nullptr, 0};
-        struct buffer_view<llama_token> sampled    = {nullptr, 0};
-        struct buffer_view<float>       probs      = {nullptr, 0};
-        struct buffer_view<llama_token> candidates = {nullptr, 0};
+        buffer_view<float>       logits     = {nullptr, 0};
+        buffer_view<llama_token> sampled    = {nullptr, 0};
+        buffer_view<float>       probs      = {nullptr, 0};
+        buffer_view<llama_token> candidates = {nullptr, 0};
 
         std::vector<uint32_t> logits_count;
         std::vector<uint32_t> probs_count;
         std::vector<uint32_t> candidates_count;
 
+        // optimization
         std::vector<llama_token> token_ids_full_vocab;
     };
 
@@ -339,6 +343,9 @@ private:
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
+
+    // keep copies of the per-sequence memory on the device
+    std::map<llama_seq_id, llama_memory_buffers> mem_storage;
 
     bool has_evaluated_once = false;
 
