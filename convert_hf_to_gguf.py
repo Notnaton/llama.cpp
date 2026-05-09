@@ -14009,6 +14009,10 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     arch = None
     if (arches := hparams.get("architectures")) is not None and len(arches) > 0:
         arch = arches[0]
+    elif hparams.get("model_type") == "voxtral_tts":
+        # Voxtral-TTS currently ships params.json without an `architectures` field.
+        # Route it to the existing Voxtral multimodal converter.
+        arch = "VoxtralForConditionalGeneration"
     elif "ssm_cfg" in hparams:
         # For non-hf Mamba and Mamba2 models
         arch = hparams["ssm_cfg"].get("layer", "Mamba") + "ForCausalLM"
